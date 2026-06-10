@@ -1,0 +1,1429 @@
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService       = game:GetService("HttpService")
+local Lighting          = game:GetService("Lighting")
+local TweenService      = game:GetService("TweenService")
+local UserInputService  = game:GetService("UserInputService")
+local RunService        = game:GetService("RunService")
+local LocalPlayer       = Players.LocalPlayer
+
+local Events = ReplicatedStorage:WaitForChild("Events", 10)
+
+local function findEv(name)
+    if not Events then return nil end
+    local exact = Events:FindFirstChild(name)
+    if exact then return exact end
+    local lower = name:lower()
+    for _, v in ipairs(Events:GetChildren()) do
+        if v.Name:lower() == lower then return v end
+    end
+    return nil
+end
+
+local function scanRewardEvents()
+    local found = {}
+    if not Events then return found end
+    local keywords = {
+        "claim", "reward", "bonus", "offline", "earnings", "casepot",
+        "timed", "individual", "hatched", "leaver", "free", "premium", "knife",
+        "activity", "playtime", "minute",
+    }
+    for _, v in ipairs(Events:GetChildren()) do
+        local lower = v.Name:lower()
+        for _, kw in ipairs(keywords) do
+            if lower:find(kw) then found[v.Name] = v; break end
+        end
+    end
+    return found
+end
+
+local E = {
+    RequestCaseStream        = Events and Events:WaitForChild("RequestCaseStream", 5),
+    RequestGemRun            = findEv("RequestGemRun"),
+    RequestGemShopPurchase   = findEv("RequestGemShopPurchase"),
+    UseGemShopItem           = findEv("UseGemShopItem"),
+    ClaimOfflineEarnings     = findEv("ClaimOfflineEarnings"),
+    ClaimTimedReward         = findEv("ClaimTimedReward"),
+    ClaimIndividualReward    = findEv("ClaimIndividualReward"),
+    ClaimJumboCasepotRewards = findEv("ClaimJumboCasepotRewards"),
+    ClaimMiniCasepotCase     = findEv("ClaimMiniCasepotCase"),
+    ClaimLeaverBonus         = findEv("ClaimLeaverBonus"),
+    ClaimFreeRareKnife       = findEv("ClaimFreeRareKnife"),
+    ClaimPremiumCaseReward   = findEv("ClaimPremiumCaseReward"),
+    ClaimHatchedItem         = findEv("ClaimHatchedItem"),
+    RequestSlotUpgrade       = findEv("RequestSlotUpgrade"),
+    RequestBaseUpgrade       = findEv("RequestBaseUpgrade"),
+    RequestRebirth           = findEv("RequestRebirth"),
+    PromptGemProductPurchase = findEv("PromptGemProductPurchase"),
+}
+
+local BEGIN_POSITION = Vector3.new(-1609.88720703125, -337.5, -1339.7470703125)
+
+local NotifyHook
+
+local function Fire(ev)         if ev then pcall(function() ev:FireServer() end) end end
+local function FireA(ev, a)     if ev then pcall(function() ev:FireServer(a) end) end end
+local function FireAB(ev, a, b) if ev then pcall(function() ev:FireServer(a, b) end) end end
+
+local ShopItems = {
+    {id="IncomePotion",                       label="Income Potion"},
+    {id="LuckPotion",                         label="Luck Potion"},
+    {id="MutationPotion",                     label="Mutation Potion"},
+    {id="RandomMutationStone",                label="Random Mutation Stone"},
+    {id="MutationStoneRemover",               label="Stone Remover"},
+    {id="GlitchMutationStone",                label="Glitch Stone"},
+    {id="SpaceMutationStone",                 label="Space Stone"},
+    {id="ShadowMutationStone",                label="Shadow Stone"},
+    {id="FrostMutationStone",                 label="Frost Stone"},
+    {id="ElectricMutationStone",              label="Electric Stone"},
+    {id="TempestMutationStone",               label="Tempest Stone"},
+    {id="TerraMutationStone",                 label="Terra Stone"},
+    {id="OceanMutationStone",                 label="Ocean Stone"},
+    {id="FlameMutationStone",                 label="Flame Stone"},
+    {id="LightMutationStone",                 label="Light Stone"},
+    {id="GemRushEventSpawner",                label="Gem Rush Event"},
+    {id="DoubleLuckEventSpawner",             label="Double Luck Event"},
+    {id="FireMutationFrenzyEventSpawner",     label="Fire Frenzy Event"},
+    {id="OceanMutationFrenzyEventSpawner",    label="Ocean Frenzy Event"},
+    {id="TerraMutationFrenzyEventSpawner",    label="Terra Frenzy Event"},
+    {id="TempestMutationFrenzyEventSpawner",  label="Tempest Frenzy Event"},
+    {id="ElectricMutationFrenzyEventSpawner", label="Electric Frenzy Event"},
+    {id="FrostMutationFrenzyEventSpawner",    label="Frost Frenzy Event"},
+    {id="LightMutationEventEventSpawner",     label="Light Event"},
+    {id="GalacticConcaveEventSpawner",        label="Galactic Event"},
+    {id="LunarSurgeEventSpawner",             label="Lunar Event"},
+    {id="WoodenCaseEventEventSpawner",        label="Wooden Case Event"},
+    {id="NormalCaseEventEventSpawner",        label="Normal Case Event"},
+    {id="GoldenCaseEventEventSpawner",        label="Golden Case Event"},
+    {id="DiamondCaseEventEventSpawner",       label="Diamond Case Event"},
+    {id="CrimsonCaseEventEventSpawner",       label="Crimson Case Event"},
+    {id="ViridianCaseEventEventSpawner",      label="Viridian Case Event"},
+    {id="EtherealCaseEventEventSpawner",      label="Ethereal Case Event"},
+    {id="CelestialCaseEventEventSpawner",     label="Celestial Case Event"},
+    {id="PrismaticCaseEventEventSpawner",     label="Prismatic Case Event"},
+    {id="EclipseCaseEventEventSpawner",       label="Eclipse Case Event"},
+}
+local ShopLabels, ShopLabelToId = {}, {}
+for _, s in ipairs(ShopItems) do
+    table.insert(ShopLabels, s.label)
+    ShopLabelToId[s.label] = s.id
+end
+
+local CONFIG_FOLDER = "AutoKick"
+local CONFIG_FILE   = CONFIG_FOLDER .. "/config_v1.json"
+local DefaultSettings = {
+    AutoOpen=false, AutoBuy=false, OpenDelay=0.3, MaxRerolls=50,
+    SelectedMutations={"Any"}, SelectedRarities={"Any"},
+    AutoCash=false, CashDelay=0.5,
+    AutoGems=false, GemDelay=0.5,
+    AutoRebirth=false, RebirthDelay=5,
+    AutoUpgrade=false, UpgradeDelay=1,
+    SpeedMult=1, FpsBooster=false, TargetFPS=60, AntiAFK=false,
+    AutoKick=false, KickDelay=0.8, KickBlockType="Unforgotten", AutoEquip=false,
+    AutoRewards=false, RewardDelay=5,
+    RewardEventName="ClaimTimedReward", RewardButtonText="activit",
+    AutoShopGems=false, ShopItemLabel="Income Potion", SelectedShopItems={"Income Potion"},
+    AutoRejoin=false, Presets={},
+    AutoClaimAll=false, ClaimDelay=10,
+    AutoSell=false, SellDelay=5, SellMaxRarity="Common", SellKeepMutated=true,
+    WebhookEnabled=false, WebhookURL="",
+    TotalOpened=0, TotalGems=0, TotalCash=0, TotalRewards=0, TotalKicks=0,
+}
+local S = {}
+for k, v in pairs(DefaultSettings) do
+    if type(v) == "table" then
+        S[k] = {}; for i, item in ipairs(v) do S[k][i] = item end
+    else
+        S[k] = v
+    end
+end
+
+pcall(function()
+    if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end
+    if isfile(CONFIG_FILE) then
+        local d = HttpService:JSONDecode(readfile(CONFIG_FILE))
+        for k, v in pairs(d) do
+            if DefaultSettings[k] ~= nil then S[k] = v end
+        end
+    end
+end)
+
+do
+    local src = S.Presets or {}
+    local norm = {}
+    for i = 1, 3 do norm[i] = src[i] or src[tostring(i)] or false end
+    S.Presets = norm
+end
+
+local function Save()
+    pcall(function()
+        if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end
+        local t = {}
+        for k, v in pairs(S) do
+            if not k:match("^Total") then t[k] = v end
+        end
+        writefile(CONFIG_FILE, HttpService:JSONEncode(t))
+    end)
+end
+
+local function SendWebhook(title, desc)
+    if not S.WebhookEnabled or not S.WebhookURL or S.WebhookURL == "" then return end
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req then return end
+    local body = HttpService:JSONEncode({
+        embeds = {{ title = title, description = desc, color = 8930775 }},
+    })
+    pcall(function()
+        req({ Url = S.WebhookURL, Method = "POST",
+              Headers = {["Content-Type"] = "application/json"}, Body = body })
+    end)
+end
+
+local claimThread
+local function DoClaimAll()
+    Fire(E.ClaimFreeRareKnife)
+    Fire(E.ClaimLeaverBonus)
+    Fire(E.ClaimOfflineEarnings)
+end
+local function StartClaimAll()
+    if claimThread then return end
+    claimThread = task.spawn(function()
+        while S.AutoClaimAll do pcall(DoClaimAll); task.wait(S.ClaimDelay) end
+        claimThread = nil
+    end)
+end
+local function StopClaimAll() S.AutoClaimAll = false; claimThread = nil end
+
+local RARITY_ORDER = {
+    "Common","Rare","Mythic","Legendary","Transcendent","Supreme","Sacred",
+    "Divine","Exotic","Demon","World","Zero","Soul","Forgotten","Unforgotten",
+    "Digital","Horizon","Sundered","Igneous"
+}
+local function rarityRank(name)
+    name = tostring(name):lower()
+    for i, r in ipairs(RARITY_ORDER) do
+        if r:lower() == name then return i end
+    end
+    return 999
+end
+
+local sellThread
+local function DoSell()
+    local sellReq = Events and Events:FindFirstChild("RequestSell")
+    local char = LocalPlayer.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    local bp   = LocalPlayer:FindFirstChild("Backpack")
+    if not (sellReq and hum and bp) then return end
+    local maxRank = rarityRank(S.SellMaxRarity)
+    for _, tool in ipairs(bp:GetChildren()) do
+        if not S.AutoSell then break end
+        if tool:IsA("Tool") then
+            local rar = tool:GetAttribute("Rarity")
+            local mut = tool:GetAttribute("Mutation")
+            local ln  = tool.Name:lower()
+            local isCase = ln:find("case") or ln:find("block")
+            local hasMut = mut and mut ~= "" and tostring(mut):lower() ~= "none"
+            if rar and not isCase and rarityRank(rar) <= maxRank
+               and not (S.SellKeepMutated and hasMut) then
+                pcall(function() hum:EquipTool(tool) end)
+                task.wait(0.1)
+                pcall(function() sellReq:FireServer("Equipped") end)
+                task.wait(0.1)
+            end
+        end
+    end
+end
+local function StartSell()
+    if sellThread then return end
+    sellThread = task.spawn(function()
+        while S.AutoSell do pcall(DoSell); task.wait(S.SellDelay) end
+        sellThread = nil
+    end)
+end
+local function StopSell() S.AutoSell = false; sellThread = nil end
+
+local MutationList = {
+    "Any","Wooden","Normal","Golden","Diamond","Crimson","Viridian",
+    "Ethereal","Celestial","Prismatic","Eclipse","Astral","Primordial",
+    "Galactic","Lunar","Timeless","Abyss"
+}
+local RarityList = {
+    "Any","Common","Rare","Mythic","Legendary","Transcendent","Supreme",
+    "Sacred","Divine","Exotic","Demon","World","Zero","Soul","Forgotten",
+    "Unforgotten","Digital","Horizon","Sundered","Igneous"
+}
+
+local function tableContains(t, value)
+    for _, v in ipairs(t) do if v == value then return true end end
+    return false
+end
+
+local function CaseMatches(name)
+    local parts = {}
+    for p in name:gmatch("([^_]+)") do parts[#parts+1] = p end
+    local mut = parts[2] or ""
+    local rar = parts[3] or ""
+    local mOk = tableContains(S.SelectedMutations, "Any") or tableContains(S.SelectedMutations, mut)
+    local rOk = tableContains(S.SelectedRarities, "Any") or tableContains(S.SelectedRarities, rar)
+    return mOk and rOk
+end
+
+local function GetPlot()
+    local direct = game.Workspace:FindFirstChild("Plot_" .. LocalPlayer.Name)
+    if direct then return direct end
+    for _, v in ipairs(game.Workspace:GetChildren()) do
+        if v.Name:find("Plot") then
+            local o = v:GetAttribute("Owner") or v:GetAttribute("owner") or v:GetAttribute("PlayerName")
+            if o == LocalPlayer.Name or o == LocalPlayer.UserId then return v end
+        end
+    end
+    for _, v in ipairs(game.Workspace:GetChildren()) do
+        if v.Name:find("Plot") then
+            if v:FindFirstChild("CaseConveyor") then return v end
+        end
+    end
+end
+
+local function GetConveyor()
+    local p = GetPlot()
+    return p and p:FindFirstChild("CaseConveyor") or nil
+end
+
+local function RerollConveyor()
+    local c = GetConveyor(); if not c then return false end
+    local b = c:FindFirstChild("RerollButton"); if not b then return false end
+    local cl = b:FindFirstChild("Clicker"); if not cl then return false end
+    local cd = cl:FindFirstChild("RerollClickDetector"); if not cd then return false end
+    pcall(function() fireclickdetector(cd) end)
+    return true
+end
+
+local function FindMatchingPrompt(conveyor)
+    for _, child in ipairs(conveyor:GetChildren()) do
+        if child.Name:find("ForSale_") and CaseMatches(child.Name) then
+            local proxy = child:FindFirstChild("PurchaseProxy")
+            if proxy then
+                local prompt = proxy:FindFirstChildWhichIsA("ProximityPrompt")
+                if prompt then return prompt, child.Name end
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function bestMatch(name, list)
+    local best
+    for _, item in ipairs(list) do
+        if item ~= "Any" and name:find(item:lower(), 1, true) then
+            if not best or #item > #best then best = item end
+        end
+    end
+    return best
+end
+local function detectEquippedCase()
+    local char = LocalPlayer.Character
+    local tool = char and char:FindFirstChildOfClass("Tool")
+    if not tool then return nil, nil, nil end
+    local n = tool.Name:lower()
+    return bestMatch(n, RarityList), bestMatch(n, MutationList), tool
+end
+
+local function findCaseTool(container)
+    if not container then return nil end
+    for _, t in ipairs(container:GetChildren()) do
+        if t:IsA("Tool") then
+            local ln = t.Name:lower()
+            if ln:find("case") or ln:find("block") or bestMatch(ln, RarityList) then
+                return t
+            end
+        end
+    end
+    return nil
+end
+
+local function equipCaseIfNeeded()
+    local char = LocalPlayer.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if char:FindFirstChildOfClass("Tool") then return end
+    local tool = findCaseTool(LocalPlayer:FindFirstChild("Backpack"))
+    if tool then pcall(function() hum:EquipTool(tool) end); task.wait(0.1) end
+end
+
+local function DoKick()
+    local consume = Events and Events:FindFirstChild("ConsumeEquippedLuckyBlock")
+    local claim   = Events and Events:FindFirstChild("ClaimHatchedItem")
+    if not consume then return false, "ConsumeEquippedLuckyBlock not found" end
+
+    equipCaseIfNeeded()
+
+    local rarity = detectEquippedCase() or (S.KickBlockType ~= "" and S.KickBlockType) or "Forgotten"
+    if rarity then S.KickBlockType = rarity end
+
+    local ok, _success, reward = pcall(function() return consume:InvokeServer(rarity) end)
+
+    S.TotalKicks  = S.TotalKicks + 1
+    S.TotalOpened = S.TotalOpened + 1
+
+    if ok and type(reward) == "table" and claim then
+        local item = reward.RewardItemName
+        local rar  = reward.RewardRarity or rarity
+        local mut  = reward.RewardMutation
+        if item then
+            if mut and mut ~= "" then
+                pcall(function() claim:FireServer(item, rar, mut) end)
+            else
+                pcall(function() claim:FireServer(item, rar) end)
+            end
+            if reward.RewardIsNewKnife then
+                local msg = tostring(item) .. " [" .. tostring(rar)
+                    .. (mut and (" / " .. mut) or "") .. "]"
+                if NotifyHook then NotifyHook("NEW knife!", msg, 4) end
+                SendWebhook("New knife!", msg)
+            end
+            return true, "Kick: " .. tostring(item) .. " [" .. tostring(rar)
+                         .. (mut and (" / " .. mut) or "") .. "]"
+        end
+    end
+    return true, "Consume(" .. tostring(rarity) .. ") - no reward table"
+end
+
+local kickThread
+local function StartKickLoop()
+    if kickThread then return end
+    kickThread = task.spawn(function()
+        while S.AutoKick do pcall(DoKick); task.wait(S.KickDelay) end
+        kickThread = nil
+    end)
+end
+local function StopKickLoop() S.AutoKick = false; kickThread = nil end
+
+local autoEquipThread
+local function StartAutoEquip()
+    if autoEquipThread then return end
+    autoEquipThread = task.spawn(function()
+        while S.AutoEquip do
+            pcall(equipCaseIfNeeded)
+            task.wait(0.5)
+        end
+        autoEquipThread = nil
+    end)
+end
+local function StopAutoEquip() S.AutoEquip = false; autoEquipThread = nil end
+
+local function ClaimActivityReward()
+    local ev = Events and Events:FindFirstChild("ClaimTimedReward")
+    if not ev then return false, "ClaimTimedReward not found" end
+    for i = 1, 20 do
+        pcall(function() ev:FireServer("Activity", i) end)
+    end
+    S.TotalRewards = S.TotalRewards + 1
+    return true, "Activity 1..20"
+end
+
+local rewardThread
+local function StartRewardLoop()
+    if rewardThread then return end
+    rewardThread = task.spawn(function()
+        while S.AutoRewards do pcall(ClaimActivityReward); task.wait(S.RewardDelay) end
+        rewardThread = nil
+    end)
+end
+local function StopRewardLoop() S.AutoRewards = false; rewardThread = nil end
+
+local function OpenCase()
+    if not E.RequestCaseStream then return end
+    pcall(function() E.RequestCaseStream:FireServer("Begin", BEGIN_POSITION) end)
+    task.wait(S.OpenDelay)
+    pcall(function() E.RequestCaseStream:FireServer("End") end)
+    S.TotalOpened = S.TotalOpened + 1
+end
+
+local openThread
+local function StartOpenLoop()
+    if openThread then return end
+    openThread = task.spawn(function()
+        while S.AutoOpen do
+            pcall(function()
+                local conv = GetConveyor()
+                if not conv then task.wait(1); return end
+                local prompt = FindMatchingPrompt(conv)
+                local rerolls = 0
+                while not prompt and S.AutoOpen and rerolls < S.MaxRerolls do
+                    RerollConveyor(); task.wait(0.35)
+                    conv = GetConveyor()
+                    if conv then prompt = FindMatchingPrompt(conv) end
+                    rerolls = rerolls + 1
+                end
+                if not prompt then return end
+                if S.AutoBuy then fireproximityprompt(prompt); task.wait(0.4) end
+                OpenCase()
+            end)
+        end
+        openThread = nil
+    end)
+end
+local function StopOpenLoop() S.AutoOpen = false; openThread = nil end
+
+local function CollectCash()
+    local plot = GetPlot(); if not plot then return end
+    local char = LocalPlayer.Character; if not char then return end
+    local hrp  = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+    for _, floor in ipairs(plot:GetChildren()) do
+        if floor.Name:find("Floor") then
+            local slots = floor:FindFirstChild("Slots")
+            if slots then
+                for _, slot in ipairs(slots:GetChildren()) do
+                    local ct = slot:FindFirstChild("CollectTouch")
+                    if ct then
+                        pcall(function() firetouchinterest(hrp, ct, 0) end)
+                        pcall(function() firetouchinterest(hrp, ct, 1) end)
+                    end
+                end
+            end
+        end
+    end
+    Fire(E.ClaimOfflineEarnings)
+    S.TotalCash = S.TotalCash + 1
+end
+
+local cashThread
+local function StartCashLoop()
+    if cashThread then return end
+    cashThread = task.spawn(function()
+        while S.AutoCash do pcall(CollectCash); task.wait(S.CashDelay) end
+        cashThread = nil
+    end)
+end
+local function StopCashLoop() S.AutoCash = false; cashThread = nil end
+
+local gemWatcher
+local function isGem(obj)
+    return obj:IsA("BasePart") and obj.Name:lower():find("gem") ~= nil
+end
+
+local function touchGem(hrp, part)
+    pcall(function() firetouchinterest(hrp, part, 0) end)
+    pcall(function() firetouchinterest(hrp, part, 1) end)
+end
+
+local function gatherGems()
+    local list = {}
+    for _, folder in ipairs({
+        game.Workspace:FindFirstChild("Strange Gems"),
+        game.Workspace:FindFirstChild("ActiveRunStrangeGems"),
+    }) do
+        if folder then
+            for _, d in ipairs(folder:GetDescendants()) do
+                if isGem(d) then list[#list+1] = d end
+            end
+        end
+    end
+    return list
+end
+
+local ToggleMorph = Events and Events:FindFirstChild("ToggleMorphVisibility")
+
+local function CollectAllGems()
+    local char = LocalPlayer.Character; if not char then return end
+    local hrp  = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+    local gems = gatherGems()
+    if #gems == 0 then return end
+    local origin = hrp.CFrame
+    pcall(function() if E.RequestGemRun then E.RequestGemRun:FireServer("Begin", hrp.Position) end end)
+    pcall(function() if ToggleMorph then ToggleMorph:FireServer(true) end end)
+    task.wait(0.15)
+    for _, gem in ipairs(gems) do
+        if gem and gem.Parent then
+            pcall(function() hrp.CFrame = gem.CFrame end)
+            task.wait(0.05)
+            S.TotalGems = S.TotalGems + 1
+        end
+    end
+    pcall(function() if ToggleMorph then ToggleMorph:FireServer(false) end end)
+    pcall(function() if E.RequestGemRun then E.RequestGemRun:FireServer("End") end end)
+    pcall(function() hrp.CFrame = origin end)
+end
+
+local function StartGemWatcher()
+    if gemWatcher then return end
+    gemWatcher = true
+    task.spawn(function()
+        while S.AutoGems do pcall(CollectAllGems); task.wait(S.GemDelay) end
+        gemWatcher = nil
+    end)
+end
+local function StopGemWatcher()
+    S.AutoGems = false
+    gemWatcher = nil
+end
+
+local function BuyShopItem()
+    local list = S.SelectedShopItems
+    if not list or #list == 0 then return end
+    for _, label in ipairs(list) do
+        local id = ShopLabelToId[label] or label
+        if id and id ~= "" then
+            FireA(E.RequestGemShopPurchase, id); task.wait(0.1)
+            FireA(E.UseGemShopItem, id);         task.wait(0.1)
+            FireA(E.PromptGemProductPurchase, id)
+            task.wait(0.1)
+        end
+    end
+end
+
+local shopThread
+local function StartShopLoop()
+    if shopThread then return end
+    shopThread = task.spawn(function()
+        while S.AutoShopGems do pcall(BuyShopItem); task.wait(2) end
+        shopThread = nil
+    end)
+end
+local function StopShopLoop() S.AutoShopGems = false; shopThread = nil end
+
+local function UpgradeAllSlots()
+    for _, f in ipairs({"Floor1","Floor2","Floor3"}) do
+        for i = 1, 10 do FireAB(E.RequestSlotUpgrade, f, "Slot" .. i) end
+    end
+    Fire(E.RequestBaseUpgrade)
+end
+
+local upgradeThread
+local function StartUpgradeLoop()
+    if upgradeThread then return end
+    upgradeThread = task.spawn(function()
+        while S.AutoUpgrade do pcall(UpgradeAllSlots); task.wait(S.UpgradeDelay) end
+        upgradeThread = nil
+    end)
+end
+local function StopUpgradeLoop() S.AutoUpgrade = false; upgradeThread = nil end
+
+local afkConn
+local function StartAntiAFK()
+    if afkConn then return end
+    pcall(function()
+        local VU = game:GetService("VirtualUser")
+        afkConn = LocalPlayer.Idled:Connect(function()
+            if S.AntiAFK then VU:CaptureController(); VU:ClickButton2(Vector2.new()) end
+        end)
+    end)
+end
+local function StopAntiAFK() S.AntiAFK = false; if afkConn then afkConn:Disconnect(); afkConn = nil end end
+
+local fpsActive, origQuality = false, nil
+local function ApplyFPSBoost()
+    if fpsActive then return end
+    fpsActive = true
+    pcall(function() origQuality = settings().Rendering.QualityLevel end)
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+    pcall(function() Lighting.GlobalShadows = false end)
+    pcall(function() Lighting.FogEnd = 9e9 end)
+    for _, obj in ipairs(game.Workspace:GetDescendants()) do
+        pcall(function()
+            if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Smoke")
+                or obj:IsA("Fire") or obj:IsA("Sparkles") then obj.Enabled = false end
+        end)
+    end
+    pcall(function() setfpscap(S.TargetFPS) end)
+end
+local function RemoveFPSBoost()
+    if not fpsActive then return end
+    fpsActive = false
+    pcall(function() settings().Rendering.QualityLevel = origQuality end)
+    pcall(function() Lighting.GlobalShadows = true end)
+    pcall(function() setfpscap(0) end)
+end
+
+local function ApplySpeed()
+    local char = LocalPlayer.Character; if not char then return end
+    local hum  = char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.WalkSpeed = 16 * S.SpeedMult end
+end
+RunService.Heartbeat:Connect(function()
+    if S.SpeedMult and S.SpeedMult ~= 1 then
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local target = 16 * S.SpeedMult
+        if hum and hum.WalkSpeed ~= target then hum.WalkSpeed = target end
+    end
+end)
+LocalPlayer.CharacterAdded:Connect(function() task.wait(1); ApplySpeed() end)
+
+local TeleportService = game:GetService("TeleportService")
+game:GetService("GuiService").ErrorMessageChanged:Connect(function()
+    if S.AutoRejoin then
+        task.wait(1)
+        pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
+    end
+end)
+
+local Theme = {
+    Bg       = Color3.fromRGB(20, 20, 28),
+    Panel    = Color3.fromRGB(28, 28, 38),
+    Panel2   = Color3.fromRGB(36, 36, 48),
+    Sidebar  = Color3.fromRGB(24, 24, 32),
+    Accent   = Color3.fromRGB(124, 92, 255),
+    AccentDim= Color3.fromRGB(70, 55, 130),
+    On       = Color3.fromRGB(86, 204, 130),
+    Off      = Color3.fromRGB(70, 70, 86),
+    Text     = Color3.fromRGB(236, 236, 246),
+    Sub      = Color3.fromRGB(150, 150, 168),
+    Stroke   = Color3.fromRGB(48, 48, 62),
+}
+
+local function mk(class, props, children)
+    local o = Instance.new(class)
+    for k, v in pairs(props or {}) do o[k] = v end
+    for _, c in ipairs(children or {}) do c.Parent = o end
+    return o
+end
+local function corner(r) return mk("UICorner", {CornerRadius = UDim.new(0, r or 8)}) end
+local function stroke(c, t) return mk("UIStroke", {Color = c or Theme.Stroke, Thickness = t or 1}) end
+local function pad(p) return mk("UIPadding", {
+    PaddingTop = UDim.new(0,p), PaddingBottom = UDim.new(0,p),
+    PaddingLeft = UDim.new(0,p), PaddingRight = UDim.new(0,p)}) end
+
+local UILib = {}
+UILib.__index = UILib
+
+function UILib.new(title)
+    local self = setmetatable({}, UILib)
+    local parent = (gethui and gethui()) or game:GetService("CoreGui")
+
+    local sg = mk("ScreenGui", {
+        Name = "AutoKickV1", ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        IgnoreGuiInset = true, DisplayOrder = 9999,
+    })
+    pcall(function() sg.Parent = parent end)
+    if not sg.Parent then sg.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+    self.gui = sg
+
+    local main = mk("Frame", {
+        Name = "Main", Size = UDim2.fromOffset(620, 420),
+        Position = UDim2.new(0.5, -310, 0.5, -210),
+        BackgroundColor3 = Theme.Bg, BorderSizePixel = 0,
+    }, {corner(12), stroke(Theme.Stroke, 1.5)})
+    main.Parent = sg
+    self.main = main
+
+    local bar = mk("Frame", {
+        Name = "Bar", Size = UDim2.new(1, 0, 0, 42),
+        BackgroundColor3 = Theme.Panel, BorderSizePixel = 0,
+    }, {corner(12)})
+    bar.Parent = main
+    mk("Frame", {Size = UDim2.new(1,0,0,14), Position = UDim2.new(0,0,1,-14),
+        BackgroundColor3 = Theme.Panel, BorderSizePixel = 0}).Parent = bar
+
+    mk("Frame", {Size = UDim2.fromOffset(6, 22), Position = UDim2.fromOffset(14, 10),
+        BackgroundColor3 = Theme.Accent, BorderSizePixel = 0}, {corner(3)}).Parent = bar
+    mk("TextLabel", {
+        Text = title, Font = Enum.Font.GothamBold, TextSize = 16,
+        TextColor3 = Theme.Text, BackgroundTransparency = 1,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Position = UDim2.fromOffset(30, 0), Size = UDim2.new(1, -120, 1, 0),
+    }).Parent = bar
+
+    local function topBtn(txt, xoff, col)
+        local b = mk("TextButton", {
+            Text = txt, Font = Enum.Font.GothamBold, TextSize = 16,
+            TextColor3 = Theme.Text, BackgroundColor3 = col, AutoButtonColor = true,
+            Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, xoff, 0, 8),
+            BorderSizePixel = 0,
+        }, {corner(6)})
+        b.Parent = bar
+        return b
+    end
+    local closeBtn = topBtn("X", -34, Color3.fromRGB(200, 70, 80))
+    local minBtn   = topBtn("-", -66, Theme.Panel2)
+
+    local side = mk("Frame", {
+        Name = "Side", Size = UDim2.new(0, 150, 1, -52),
+        Position = UDim2.fromOffset(8, 48),
+        BackgroundColor3 = Theme.Sidebar, BorderSizePixel = 0,
+    }, {corner(10), pad(8),
+        mk("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder})})
+    side.Parent = main
+    self.side = side
+
+    local pages = mk("Frame", {
+        Name = "Pages", Size = UDim2.new(1, -174, 1, -52),
+        Position = UDim2.fromOffset(166, 48),
+        BackgroundColor3 = Theme.Panel, BorderSizePixel = 0,
+    }, {corner(10)})
+    pages.Parent = main
+    self.pages = pages
+
+    self.tabs = {}
+    self.currentPage = nil
+
+    do
+        local dragging, dragStart, startPos
+        bar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true; dragStart = input.Position; startPos = main.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                end)
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+                local d = input.Position - dragStart
+                main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                          startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+    end
+
+    local minimized = false
+    minBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        side.Visible = not minimized
+        pages.Visible = not minimized
+        main:TweenSize(minimized and UDim2.fromOffset(620, 42) or UDim2.fromOffset(620, 420),
+            Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.2, true)
+    end)
+    closeBtn.MouseButton1Click:Connect(function() sg:Destroy() end)
+
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.K then main.Visible = not main.Visible end
+    end)
+
+    self.notifHolder = mk("Frame", {
+        Name = "Notifs", AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, -12, 1, -12), Size = UDim2.fromOffset(280, 400),
+        BackgroundTransparency = 1,
+    }, {mk("UIListLayout", {Padding = UDim.new(0, 8),
+        VerticalAlignment = Enum.VerticalAlignment.Bottom,
+        HorizontalAlignment = Enum.HorizontalAlignment.Right,
+        SortOrder = Enum.SortOrder.LayoutOrder})})
+    self.notifHolder.Parent = sg
+
+    return self
+end
+
+function UILib:Notify(opt)
+    opt = opt or {}
+    local n = mk("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundColor3 = Theme.Panel2, BorderSizePixel = 0,
+        BackgroundTransparency = 1,
+    }, {corner(8), stroke(Theme.Accent, 1), pad(10),
+        mk("UIListLayout", {Padding = UDim.new(0, 2)})})
+    mk("TextLabel", {
+        Text = opt.Title or "Info", Font = Enum.Font.GothamBold, TextSize = 14,
+        TextColor3 = Theme.Text, BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 18), TextXAlignment = Enum.TextXAlignment.Left,
+        TextTransparency = 1,
+    }).Parent = n
+    mk("TextLabel", {
+        Text = opt.Content or "", Font = Enum.Font.Gotham, TextSize = 12,
+        TextColor3 = Theme.Sub, BackgroundTransparency = 1, TextWrapped = true,
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        TextXAlignment = Enum.TextXAlignment.Left, TextTransparency = 1,
+    }).Parent = n
+    n.Parent = self.notifHolder
+    local ti = TweenInfo.new(0.25)
+    TweenService:Create(n, ti, {BackgroundTransparency = 0}):Play()
+    for _, l in ipairs(n:GetDescendants()) do
+        if l:IsA("TextLabel") then TweenService:Create(l, ti, {TextTransparency = 0}):Play() end
+        if l:IsA("UIStroke") then TweenService:Create(l, ti, {Transparency = 0}):Play() end
+    end
+    task.delay(opt.Duration or 3, function()
+        TweenService:Create(n, ti, {BackgroundTransparency = 1}):Play()
+        for _, l in ipairs(n:GetDescendants()) do
+            if l:IsA("TextLabel") then TweenService:Create(l, ti, {TextTransparency = 1}):Play() end
+            if l:IsA("UIStroke") then TweenService:Create(l, ti, {Transparency = 1}):Play() end
+        end
+        task.delay(0.3, function() n:Destroy() end)
+    end)
+end
+
+local Tab = {}
+Tab.__index = Tab
+
+function UILib:Tab(name)
+    local btn = mk("TextButton", {
+        Text = name, Font = Enum.Font.GothamMedium, TextSize = 13,
+        TextColor3 = Theme.Sub, BackgroundColor3 = Theme.Sidebar,
+        Size = UDim2.new(1, 0, 0, 32), AutoButtonColor = false, BorderSizePixel = 0,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, {corner(7), pad(10)})
+    btn.Parent = self.side
+
+    local page = mk("ScrollingFrame", {
+        Visible = false, Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScrollBarThickness = 4, ScrollBarImageColor3 = Theme.Accent,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    }, {pad(12),
+        mk("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder})})
+    page.Parent = self.pages
+
+    local t = setmetatable({page = page, lib = self, btn = btn}, Tab)
+    table.insert(self.tabs, t)
+
+    local function select()
+        for _, tb in ipairs(self.tabs) do
+            tb.page.Visible = false
+            tb.btn.BackgroundColor3 = Theme.Sidebar
+            tb.btn.TextColor3 = Theme.Sub
+        end
+        page.Visible = true
+        btn.BackgroundColor3 = Theme.AccentDim
+        btn.TextColor3 = Theme.Text
+        self.currentPage = page
+    end
+    btn.MouseButton1Click:Connect(select)
+    if #self.tabs == 1 then select() end
+    return t
+end
+
+function Tab:Section(text)
+    local f = mk("Frame", {Size = UDim2.new(1,0,0,22), BackgroundTransparency = 1})
+    mk("TextLabel", {
+        Text = text:upper(), Font = Enum.Font.GothamBold, TextSize = 12,
+        TextColor3 = Theme.Accent, BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 1, 0), TextXAlignment = Enum.TextXAlignment.Left,
+    }).Parent = f
+    f.Parent = self.page
+    return f
+end
+
+function Tab:Paragraph(title, content)
+    local f = mk("Frame", {
+        Size = UDim2.new(1,0,0,0), AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundColor3 = Theme.Panel2, BorderSizePixel = 0,
+    }, {corner(8), pad(10), mk("UIListLayout", {Padding = UDim.new(0,3)})})
+    mk("TextLabel", {Text = title, Font = Enum.Font.GothamBold, TextSize = 13,
+        TextColor3 = Theme.Text, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,16),
+        TextXAlignment = Enum.TextXAlignment.Left}).Parent = f
+    mk("TextLabel", {Text = content, Font = Enum.Font.Gotham, TextSize = 12,
+        TextColor3 = Theme.Sub, BackgroundTransparency = 1, TextWrapped = true,
+        Size = UDim2.new(1,0,0,0), AutomaticSize = Enum.AutomaticSize.Y,
+        TextXAlignment = Enum.TextXAlignment.Left}).Parent = f
+    f.Parent = self.page
+    return f
+end
+
+function Tab:Label(text)
+    local lbl = mk("TextLabel", {
+        Text = text, Font = Enum.Font.Gotham, TextSize = 13,
+        TextColor3 = Theme.Text, BackgroundColor3 = Theme.Panel2, BorderSizePixel = 0,
+        Size = UDim2.new(1,0,0,30), TextXAlignment = Enum.TextXAlignment.Left,
+    }, {corner(7), pad(10)})
+    lbl.Parent = self.page
+    return {Set = function(_, t) lbl.Text = t end, instance = lbl}
+end
+
+function Tab:Button(text, cb)
+    local b = mk("TextButton", {
+        Text = text, Font = Enum.Font.GothamMedium, TextSize = 13,
+        TextColor3 = Theme.Text, BackgroundColor3 = Theme.Accent, AutoButtonColor = true,
+        Size = UDim2.new(1,0,0,34), BorderSizePixel = 0,
+    }, {corner(8)})
+    b.Parent = self.page
+    b.MouseButton1Click:Connect(function() pcall(cb) end)
+    return b
+end
+
+function Tab:Toggle(text, default, cb)
+    local state = default and true or false
+    local btn = mk("TextButton", {Text = "", AutoButtonColor = false,
+        Size = UDim2.new(1,0,0,38), BackgroundColor3 = Theme.Panel2,
+        BorderSizePixel = 0}, {corner(8)})
+    mk("TextLabel", {Text = text, Font = Enum.Font.GothamMedium, TextSize = 13,
+        TextColor3 = Theme.Text, BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1,-78,1,0),
+        TextXAlignment = Enum.TextXAlignment.Left}).Parent = btn
+    local pill = mk("Frame", {AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(52, 24),
+        BackgroundColor3 = state and Theme.On or Theme.Off, BorderSizePixel = 0},
+        {corner(12)})
+    pill.Parent = btn
+    local pillTxt = mk("TextLabel", {Text = state and "ON" or "OFF",
+        Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Color3.fromRGB(255,255,255),
+        BackgroundTransparency = 1, Size = UDim2.new(1,0,1,0)})
+    pillTxt.Parent = pill
+
+    local function apply()
+        pillTxt.Text = state and "ON" or "OFF"
+        TweenService:Create(pill, TweenInfo.new(0.15),
+            {BackgroundColor3 = state and Theme.On or Theme.Off}):Play()
+    end
+    btn.MouseButton1Click:Connect(function()
+        state = not state; apply(); pcall(cb, state)
+    end)
+    btn.Parent = self.page
+    return {Set = function(_, v) state = v; apply() end, Get = function() return state end}
+end
+
+function Tab:Slider(text, min, max, default, incr, suffix, cb)
+    incr = incr or 1
+    local value = default or min
+    local f = mk("Frame", {Size = UDim2.new(1,0,0,46), BackgroundColor3 = Theme.Panel2,
+        BorderSizePixel = 0}, {corner(8), pad(10)})
+    local lbl = mk("TextLabel", {Text = text, Font = Enum.Font.GothamMedium, TextSize = 13,
+        TextColor3 = Theme.Text, BackgroundTransparency = 1,
+        Size = UDim2.new(1,0,0,16), TextXAlignment = Enum.TextXAlignment.Left})
+    lbl.Parent = f
+    local valLbl = mk("TextLabel", {Text = tostring(value) .. (suffix or ""),
+        Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Accent,
+        BackgroundTransparency = 1, Size = UDim2.new(1,0,0,16),
+        TextXAlignment = Enum.TextXAlignment.Right})
+    valLbl.Parent = f
+    local track = mk("Frame", {Size = UDim2.new(1,0,0,6), Position = UDim2.new(0,0,1,-8),
+        BackgroundColor3 = Theme.Off, BorderSizePixel = 0}, {corner(3)})
+    track.Parent = f
+    local fill = mk("Frame", {BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
+        Size = UDim2.new((value-min)/(max-min), 0, 1, 0)}, {corner(3)})
+    fill.Parent = track
+
+    local function setFromX(px)
+        local rel = math.clamp((px - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+        local raw = min + rel * (max - min)
+        value = math.floor(raw / incr + 0.5) * incr
+        value = math.clamp(value, min, max)
+        fill.Size = UDim2.new((value-min)/(max-min), 0, 1, 0)
+        valLbl.Text = tostring(value) .. (suffix or "")
+        pcall(cb, value)
+    end
+    local sliding = false
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then sliding = true; setFromX(i.Position.X) end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then sliding = false end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if sliding and (i.UserInputType == Enum.UserInputType.MouseMovement
+        or i.UserInputType == Enum.UserInputType.Touch) then setFromX(i.Position.X) end
+    end)
+    f.Parent = self.page
+    return f
+end
+
+function Tab:TextInput(text, default, cb)
+    local f = mk("Frame", {Size = UDim2.new(1,0,0,34), BackgroundColor3 = Theme.Panel2,
+        BorderSizePixel = 0}, {corner(8), pad(8)})
+    mk("TextLabel", {Text = text, Font = Enum.Font.GothamMedium, TextSize = 13,
+        TextColor3 = Theme.Text, BackgroundTransparency = 1,
+        Size = UDim2.new(0.45,0,1,0), TextXAlignment = Enum.TextXAlignment.Left}).Parent = f
+    local box = mk("TextBox", {Text = default or "", PlaceholderText = "...",
+        Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Theme.Text,
+        BackgroundColor3 = Theme.Bg, BorderSizePixel = 0, ClearTextOnFocus = false,
+        Size = UDim2.new(0.55,-4,1,0), Position = UDim2.new(0.45,4,0,0),
+        TextXAlignment = Enum.TextXAlignment.Left}, {corner(6), pad(6)})
+    box.Parent = f
+    box.FocusLost:Connect(function() pcall(cb, box.Text) end)
+    f.Parent = self.page
+    return {Set = function(_, v) box.Text = v end, Get = function() return box.Text end}
+end
+
+function Tab:Dropdown(text, options, current, multi, cb, getOptions)
+    local selected = {}
+    if type(current) == "table" then
+        for _, v in ipairs(current) do selected[v] = true end
+    elseif current then selected[current] = true end
+
+    local f = mk("Frame", {Size = UDim2.new(1,0,0,34), BackgroundColor3 = Theme.Panel2,
+        BorderSizePixel = 0, ClipsDescendants = true}, {corner(8)})
+    local head = mk("TextButton", {Text = "", AutoButtonColor = false,
+        Size = UDim2.new(1,0,0,34), BackgroundTransparency = 1, BorderSizePixel = 0})
+    head.Parent = f
+    mk("TextLabel", {Text = text, Font = Enum.Font.GothamMedium, TextSize = 13,
+        TextColor3 = Theme.Text, BackgroundTransparency = 1, Size = UDim2.new(0.5,0,1,0),
+        Position = UDim2.fromOffset(10,0), TextXAlignment = Enum.TextXAlignment.Left}).Parent = head
+    local valLbl = mk("TextLabel", {Text = "", Font = Enum.Font.Gotham, TextSize = 12,
+        TextColor3 = Theme.Accent, BackgroundTransparency = 1, Size = UDim2.new(0.5,-30,1,0),
+        Position = UDim2.new(0.5,0,0,0), TextXAlignment = Enum.TextXAlignment.Right})
+    valLbl.Parent = head
+    local arrow = mk("TextLabel", {Text = "v", Font = Enum.Font.GothamBold, TextSize = 12,
+        TextColor3 = Theme.Sub, BackgroundTransparency = 1, Size = UDim2.fromOffset(20,34),
+        Position = UDim2.new(1,-26,0,0)})
+    arrow.Parent = head
+
+    local list = mk("Frame", {Size = UDim2.new(1,0,0,0), Position = UDim2.fromOffset(0,34),
+        BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.Y},
+        {pad(6), mk("UIListLayout", {Padding = UDim.new(0,4)})})
+    list.Parent = f
+
+    local function refreshLabel()
+        local sel = {}
+        for k, v in pairs(selected) do if v then sel[#sel+1] = k end end
+        valLbl.Text = #sel > 0 and table.concat(sel, ", ") or "(none)"
+        if #valLbl.Text > 28 then valLbl.Text = #sel .. " selected" end
+    end
+
+    local function buildOptions()
+        for _, c in ipairs(list:GetChildren()) do
+            if c:IsA("TextButton") then c:Destroy() end
+        end
+        local opts = getOptions and getOptions() or options
+        for _, opt in ipairs(opts) do
+            local on = selected[opt]
+            local ob = mk("TextButton", {Text = "  " .. opt, Font = Enum.Font.Gotham,
+                TextSize = 12, TextColor3 = on and Theme.Text or Theme.Sub,
+                BackgroundColor3 = on and Theme.AccentDim or Theme.Bg, BorderSizePixel = 0,
+                Size = UDim2.new(1,0,0,26), AutoButtonColor = true,
+                TextXAlignment = Enum.TextXAlignment.Left}, {corner(6)})
+            ob.Parent = list
+            ob.MouseButton1Click:Connect(function()
+                if multi then
+                    selected[opt] = not selected[opt]
+                else
+                    for k in pairs(selected) do selected[k] = nil end
+                    selected[opt] = true
+                end
+                local sel = {}
+                for k, v in pairs(selected) do if v then sel[#sel+1] = k end end
+                refreshLabel(); buildOptions()
+                pcall(cb, sel)
+                if not multi then
+                    f:TweenSize(UDim2.new(1,0,0,34), Enum.EasingDirection.Out,
+                        Enum.EasingStyle.Quad, 0.15, true)
+                    arrow.Text = "v"
+                end
+            end)
+        end
+    end
+
+    local open = false
+    head.MouseButton1Click:Connect(function()
+        open = not open
+        if open then buildOptions() end
+        arrow.Text = open and "^" or "v"
+        local h = 34
+        if open then
+            local opts = getOptions and getOptions() or options
+            h = 34 + 6 + (#opts * 30) + 6
+        end
+        f:TweenSize(UDim2.new(1,0,0,h), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.18, true)
+    end)
+
+    refreshLabel()
+    f.Parent = self.page
+    return {Refresh = function() if open then buildOptions() end end}
+end
+
+local UI = UILib.new("Auto Kick V1")
+local function Notify(t, c, d) UI:Notify({Title = t, Content = c, Duration = d or 2}) end
+NotifyHook = Notify
+
+do
+    local tab = UI:Tab("Open")
+    tab:Section("Filters (multi-select)")
+    tab:Paragraph("Multi-select", "Pick several mutations / rarities. \"Any\" = accept all. OR filter.")
+
+    tab:Dropdown("Mutations", MutationList, S.SelectedMutations, true, function(sel)
+        S.SelectedMutations = #sel > 0 and sel or {"Any"}; Save()
+    end)
+    tab:Dropdown("Rarities", RarityList, S.SelectedRarities, true, function(sel)
+        S.SelectedRarities = #sel > 0 and sel or {"Any"}; Save()
+    end)
+    tab:Button("Reset filters (accept all)", function()
+        S.SelectedMutations = {"Any"}; S.SelectedRarities = {"Any"}; Save()
+        Notify("Filters", "Reset to Any")
+    end)
+
+    tab:Section("Filter presets")
+    local filterInfo
+    local function refreshFilterInfo()
+        if filterInfo then
+            filterInfo:Set("Active: Mut " .. table.concat(S.SelectedMutations, "+")
+                .. " | Rar " .. table.concat(S.SelectedRarities, "+"))
+        end
+    end
+    filterInfo = tab:Label("Active: ...")
+    refreshFilterInfo()
+    for i = 1, 3 do
+        tab:Button("Save preset " .. i, function()
+            S.Presets[i] = {muts = S.SelectedMutations, rars = S.SelectedRarities}
+            Save(); Notify("Preset " .. i, "Saved")
+        end)
+        tab:Button("Load preset " .. i, function()
+            local p = S.Presets[i]
+            if type(p) == "table" then
+                S.SelectedMutations = p.muts or {"Any"}
+                S.SelectedRarities  = p.rars or {"Any"}
+                Save(); refreshFilterInfo()
+                Notify("Preset " .. i, "Loaded (see Active above)")
+            else
+                Notify("Preset " .. i, "Empty", 2)
+            end
+        end)
+    end
+
+    tab:Slider("Open delay", 0.1, 5, S.OpenDelay, 0.1, "s", function(v) S.OpenDelay = v; Save() end)
+    tab:Slider("Max Rerolls", 5, 200, S.MaxRerolls, 5, "", function(v) S.MaxRerolls = v; Save() end)
+
+    tab:Section("Auto")
+    tab:Toggle("Auto Buy", S.AutoBuy, function(v) S.AutoBuy = v; Save() end)
+    tab:Toggle("Auto Open", false, function(v)
+        S.AutoOpen = v; if v then StartOpenLoop() else StopOpenLoop() end
+    end)
+
+    tab:Section("Manual")
+    tab:Button("Reroll conveyor", function() RerollConveyor(); Notify("Reroll", "OK", 1) end)
+    tab:Button("Buy 1 case", function()
+        local c = GetConveyor()
+        if not c then Notify("Error", "Conveyor not found", 3); return end
+        local p, n = FindMatchingPrompt(c)
+        if p then fireproximityprompt(p); Notify("Bought", tostring(n))
+        else Notify("No case", "Filter too strict?", 3) end
+    end)
+    tab:Button("Open 1 case", function()
+        pcall(OpenCase); Notify("Opened!", "Total: " .. S.TotalOpened)
+    end)
+end
+
+do
+    local tab = UI:Tab("Farm Max")
+    tab:Section("All-in-one")
+    tab:Paragraph("Farm Max",
+        "One button: Auto Open (min delay) + Auto Gems + Auto Cash at once. Opening triggers chases, gems and cash are collected automatically.")
+
+    local savedKickDelay
+    tab:Toggle("ENABLE FARM MAX", false, function(v)
+        if v then
+            savedKickDelay = S.KickDelay
+            S.KickDelay = 0.2
+            S.AutoEquip = true; StartAutoEquip()
+            S.AutoKick = true;  StartKickLoop()
+            S.AutoGems = true;  StartGemWatcher()
+            S.AutoCash = true;  StartCashLoop()
+            Notify("Farm Max", "ON — Equip + Kick (0.2s) + Gems + Cash", 3)
+        else
+            S.AutoEquip = false; StopAutoEquip()
+            S.AutoKick = false; StopKickLoop()
+            S.AutoGems = false; StopGemWatcher()
+            S.AutoCash = false; StopCashLoop()
+            if savedKickDelay then S.KickDelay = savedKickDelay end
+            Notify("Farm Max", "OFF — all stopped", 2)
+        end
+    end)
+
+    tab:Paragraph("Tip",
+        "Equip a case before enabling. Counters (cases, gems, cash) go up in the Stats tab.")
+end
+
+do
+    local tab = UI:Tab("Open (Kick)")
+    tab:Section("Auto Open cases")
+    tab:Paragraph("Auto-detect",
+        "Detects the equipped case (in hand) and consumes it automatically. Equip a case before enabling.")
+
+    local caseLbl = tab:Label("Detected case: none")
+
+    tab:Slider("Delay between opens", 0.2, 5, S.KickDelay, 0.1, "s", function(v)
+        S.KickDelay = v; Save() end)
+    tab:Toggle("Auto Equip cases", false, function(v)
+        S.AutoEquip = v; if v then StartAutoEquip() else StopAutoEquip() end
+    end)
+    tab:Toggle("Auto Open (Kick)", false, function(v)
+        S.AutoKick = v; if v then StartKickLoop() else StopKickLoop() end
+    end)
+
+    tab:Section("Manual")
+    tab:Button("Open 1 case", function()
+        local ok, info = DoKick()
+        Notify(ok and "Opened" or "Failed", tostring(info), 2)
+    end)
+
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            pcall(function()
+                local r, m = detectEquippedCase()
+                caseLbl:Set("Detected case: " ..
+                    (r and (r .. (m and (" + " .. m) or "")) or "none (equip a case)"))
+            end)
+        end
+    end)
+end
+
+do
+    local tab = UI:Tab("Rewards")
+    tab:Section("Activity reward")
+    tab:Paragraph("Activity (minute)",
+        "Automatically claims activity rewards. Never touches the daily reward.")
+
+    tab:Slider("Interval", 1, 60, S.RewardDelay, 1, "s", function(v) S.RewardDelay = v; Save() end)
+    tab:Toggle("Auto Rewards", false, function(v)
+        S.AutoRewards = v; if v then StartRewardLoop() else StopRewardLoop() end; Save()
+    end)
+    tab:Button("Claim activity now", function()
+        local ok = ClaimActivityReward()
+        Notify(ok and "Claim OK" or "Failed", "Total: " .. S.TotalRewards, 2)
+    end)
+end
+
+do
+    local tab = UI:Tab("Shop")
+    tab:Section("Gem Shop")
+    tab:Paragraph("Multi-buy",
+        "Check one or more items: auto-shop buys them all in a loop.")
+    tab:Dropdown("Items to buy", ShopLabels, S.SelectedShopItems, true, function(sel)
+        S.SelectedShopItems = sel; Save()
+    end)
+    tab:Toggle("Auto Shop", false, function(v)
+        S.AutoShopGems = v; if v then StartShopLoop() else StopShopLoop() end; Save()
+    end)
+    tab:Button("Buy now", function()
+        if not S.SelectedShopItems or #S.SelectedShopItems == 0 then
+            Notify("Error", "Check at least one item", 3); return end
+        pcall(BuyShopItem); Notify("Bought", #S.SelectedShopItems .. " item(s)")
+    end)
+end
+
+do
+    local tab = UI:Tab("Cash & Gems")
+    tab:Section("Auto Cash")
+    tab:Slider("Cash delay", 0.1, 5, S.CashDelay, 0.1, "s", function(v) S.CashDelay = v; Save() end)
+    tab:Toggle("Auto Cash", false, function(v)
+        S.AutoCash = v; if v then StartCashLoop() else StopCashLoop() end
+    end)
+    tab:Button("Collect cash 1x", function()
+        pcall(CollectCash); Notify("Cash", "Total: " .. S.TotalCash)
+    end)
+
+    tab:Section("Auto Gems")
+    tab:Paragraph("Info", "Collects gems during chases (GemRun). Real-time watcher + scan.")
+    tab:Slider("Gem scan delay", 0.1, 5, S.GemDelay, 0.1, "s", function(v) S.GemDelay = v; Save() end)
+    tab:Toggle("Auto Gems", false, function(v)
+        S.AutoGems = v; if v then StartGemWatcher() else StopGemWatcher() end
+    end)
+    tab:Button("Claim gems 1x", function()
+        pcall(CollectAllGems); Notify("Gems", "Total: " .. S.TotalGems)
+    end)
+end
+
+do
+    local tab = UI:Tab("Misc")
+    tab:Section("Upgrade")
+    tab:Toggle("Auto Upgrade", false, function(v)
+        S.AutoUpgrade = v; if v then StartUpgradeLoop() else StopUpgradeLoop() end
+    end)
+    tab:Slider("Upgrade delay", 0.5, 10, S.UpgradeDelay, 0.5, "s", function(v) S.UpgradeDelay = v end)
+    tab:Button("Upgrade 1x", function() pcall(UpgradeAllSlots); Notify("Upgrade", "OK", 1) end)
+
+    tab:Section("Rebirth")
+    tab:Toggle("Auto Rebirth", false, function(v)
+        S.AutoRebirth = v
+        if v then task.spawn(function()
+            while S.AutoRebirth do Fire(E.RequestRebirth); task.wait(S.RebirthDelay) end
+        end) end
+    end)
+    tab:Slider("Rebirth delay", 1, 60, S.RebirthDelay, 1, "s", function(v) S.RebirthDelay = v end)
+    tab:Button("Rebirth 1x", function() Fire(E.RequestRebirth); Notify("Rebirth", "OK", 1) end)
+
+    tab:Section("Performance")
+    tab:Slider("Speed", 1, 10, S.SpeedMult, 0.5, "x", function(v)
+        S.SpeedMult = v; ApplySpeed(); Save() end)
+    tab:Toggle("Anti-AFK", S.AntiAFK, function(v)
+        S.AntiAFK = v; if v then StartAntiAFK() else StopAntiAFK() end; Save() end)
+    tab:Toggle("Auto Rejoin (disconnect/kick)", S.AutoRejoin, function(v)
+        S.AutoRejoin = v; Save() end)
+    tab:Toggle("FPS Booster", false, function(v)
+        S.FpsBooster = v; if v then ApplyFPSBoost() else RemoveFPSBoost() end; Save() end)
+    tab:Slider("FPS Cap", 30, 240, S.TargetFPS, 10, "fps", function(v)
+        S.TargetFPS = v; Save(); if fpsActive then pcall(function() setfpscap(v) end) end end)
+    tab:Button("Save config", function() Save(); Notify("Config", "Saved") end)
+end
+
+do
+    local tab = UI:Tab("Loot & Notif")
+
+    tab:Section("Auto Claim (free)")
+    tab:Paragraph("Free bonuses",
+        "Claims in a loop: free knife + leaver bonus + offline earnings. Casepot is NOT included (paid).")
+    tab:Slider("Claim interval", 5, 120, S.ClaimDelay, 5, "s", function(v) S.ClaimDelay = v; Save() end)
+    tab:Toggle("Auto Claim All", S.AutoClaimAll, function(v)
+        S.AutoClaimAll = v; if v then StartClaimAll() else StopClaimAll() end; Save()
+    end)
+
+    tab:Section("Auto Sell")
+    tab:Paragraph("Sell by rarity",
+        "Knives have no stored price, only a RARITY (= their value). Sells everything UP TO the chosen rarity (included). Mutated knives can be protected. Start safe (Common) and raise the threshold gradually.")
+    tab:Dropdown("Sell up to rarity", RARITY_ORDER, S.SellMaxRarity, false, function(sel)
+        S.SellMaxRarity = sel[1] or "Common"; Save()
+    end)
+    tab:Toggle("Keep mutated knives", S.SellKeepMutated, function(v)
+        S.SellKeepMutated = v; Save()
+    end)
+    tab:Slider("Sell interval", 1, 60, S.SellDelay, 1, "s", function(v) S.SellDelay = v; Save() end)
+    tab:Toggle("Auto Sell", S.AutoSell, function(v)
+        S.AutoSell = v; if v then StartSell() else StopSell() end; Save()
+    end)
+
+    tab:Section("Discord Webhook")
+    tab:Paragraph("Discord notif",
+        "Get a Discord notification when you pull a NEW knife (great while AFK). Paste your webhook URL then enable.")
+    tab:TextInput("Webhook URL", S.WebhookURL, function(v) S.WebhookURL = v; Save() end)
+    tab:Toggle("Enable webhook", S.WebhookEnabled, function(v)
+        S.WebhookEnabled = v; Save()
+    end)
+    tab:Button("Test webhook", function()
+        SendWebhook("Test", "Connection OK from Auto Kick V1")
+        Notify("Webhook", "Test message sent — check Discord")
+    end)
+end
+
+do
+    local tab = UI:Tab("Stats")
+    tab:Section("Session")
+    local statKeys = {
+        {key="TotalOpened", name="Opens"},
+        {key="TotalKicks",  name="Kicks"},
+        {key="TotalGems",   name="Gems"},
+        {key="TotalCash",   name="Cash"},
+        {key="TotalRewards",name="Rewards"},
+    }
+    local labels = {}
+    for _, s in ipairs(statKeys) do
+        labels[s.key] = tab:Label(s.name .. ": 0")
+    end
+    tab:Section("Active filters")
+    local filterLbl = tab:Label("Mutations: Any | Rarities: Any")
+    tab:Section("Actions")
+    tab:Button("Reset stats", function()
+        S.TotalOpened=0; S.TotalKicks=0; S.TotalGems=0; S.TotalCash=0; S.TotalRewards=0
+        Notify("Stats", "Reset to zero")
+    end)
+
+    task.spawn(function()
+        while true do
+            task.wait(1.5)
+            pcall(function()
+                for _, s in ipairs(statKeys) do
+                    labels[s.key]:Set(s.name .. ": " .. tostring(S[s.key]))
+                end
+                filterLbl:Set("Mut: " .. table.concat(S.SelectedMutations, "+")
+                    .. " | Rar: " .. table.concat(S.SelectedRarities, "+"))
+            end)
+        end
+    end)
+end
+
+if S.AntiAFK then StartAntiAFK() end
+if S.FpsBooster then ApplyFPSBoost() end
+
+local rewardCount = 0; for _ in pairs(scanRewardEvents()) do rewardCount = rewardCount + 1 end
+
+UI:Notify({
+    Title = "Auto Kick V1 loaded",
+    Content = LocalPlayer.Name .. "\n" .. rewardCount .. " reward events detected"
+        .. "\nReward = activity (ClaimTimedReward)\nKick = auto opens cases"
+        .. "\nK key = show/hide the script",
+    Duration = 6,
+})
+print("[Auto Kick V1] Loaded.")
+print("[Auto Kick V1] Kick delay: " .. tostring(S.KickDelay) .. "s")
